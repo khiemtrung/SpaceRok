@@ -1,0 +1,486 @@
+
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row =>
+                    row.some(cell => cell !== '' && cell !== null && cell !== undefined)
+                );
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SH1 - Space Hunter</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <canvas id="gameCanvas" width="800" height="600"></canvas>
+    <audio id="shootSound" src="data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA"></audio>
+    <audio id="powerUpSound" src="data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA"></audio>
+    <audio id="explosionSound" src="data:audio/wav;base64,UklGRiYAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA"></audio>
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const shootSound = document.getElementById('shootSound');
+        const powerUpSound = document.getElementById('powerUpSound');
+        const explosionSound = document.getElementById('explosionSound');
+        let gameStarted = false;
+
+        // Starfield
+        const stars = Array.from({ length: 100 }, () => ({
+            x: Math.random() * canvas.width,
+            y: Math.random() * canvas.height,
+            speed: Math.random() * 2 + 1
+        }));
+
+        // Particles for effects
+        let particles = [];
+
+        // Player
+        const player = {
+            x: canvas.width / 2,
+            y: canvas.height - 50,
+            width: 40,
+            height: 40,
+            speed: 5,
+            bullets: [],
+            gunLevel: 1,
+            health: 100,
+            maxHealth: 100
+        };
+
+        // Enemies
+        let enemies = [];
+        let enemySpeed = 2;
+        let enemySpawnRate = 60;
+
+        // Asteroids
+        let asteroids = [];
+        let asteroidSpeed = 3;
+        let asteroidSpawnRate = 100;
+
+        // Power-ups
+        let powerUps = [];
+        const powerUpSpawnRate = 300;
+
+        // Game state
+        let score = 0;
+        let gameOver = false;
+        let frameCount = 0;
+
+        // Keyboard controls
+        const keys = { ArrowLeft: false, ArrowRight: false, Space: false, Enter: false, KeyR: false };
+        document.addEventListener('keydown', (e) => {
+            if (e.code in keys) keys[e.code] = true;
+            if (e.code === 'Space' && !gameOver && gameStarted) keys.Space = true;
+            if (e.code === 'Enter' && !gameStarted) {
+                gameStarted = true;
+                keys.Enter = false;
+            }
+            if (e.code === 'KeyR' && gameOver) {
+                resetGame();
+                keys.KeyR = false;
+            }
+        });
+        document.addEventListener('keyup', (e) => {
+            if (e.code in keys) keys[e.code] = false;
+            if (e.code === 'Space') keys.Space = false;
+        });
+
+        // Reset game
+        function resetGame() {
+            player.x = canvas.width / 2;
+            player.y = canvas.height - 50;
+            player.bullets = [];
+            player.gunLevel = 1;
+            player.health = player.maxHealth;
+            enemies = [];
+            asteroids = [];
+            powerUps = [];
+            particles = [];
+            score = 0;
+            gameOver = false;
+            frameCount = 0;
+            enemySpeed = 2;
+            asteroidSpeed = 3;
+            enemySpawnRate = 60;
+            asteroidSpawnRate = 100;
+            gameStarted = true;
+        }
+
+        // Bullet creation
+        function shootBullet() {
+            if (keys.Space && gameStarted) {
+                const fireRate = Math.max(2, 10 - player.gunLevel + 1);
+                if (frameCount % fireRate === 0) {
+                    const bulletCount = player.gunLevel <= 3 ? 1 : player.gunLevel <= 6 ? 2 : 3;
+                    const bulletSpread = 7.5;
+                    for (let i = 0; i < bulletCount; i++) {
+                        let offsetX = 0;
+                        if (bulletCount === 2) offsetX = i === 0 ? -bulletSpread : bulletSpread;
+                        if (bulletCount === 3) offsetX = i === 0 ? -bulletSpread : i === 1 ? 0 : bulletSpread;
+                        player.bullets.push({
+                            x: player.x + player.width / 2 - 2.5 + offsetX,
+                            y: player.y,
+                            width: 5,
+                            height: 10,
+                            speed: 7
+                        });
+                    }
+                    shootSound.currentTime = 0;
+                    shootSound.play().catch(() => {});
+                }
+            }
+        }
+
+        // Increase difficulty
+        function updateDifficulty() {
+            const difficultyFactor = Math.floor(score / 100);
+            enemySpeed = 2 + difficultyFactor * 0.5;
+            asteroidSpeed = 3 + difficultyFactor * 0.3;
+            enemySpawnRate = Math.max(20, 60 - difficultyFactor * 5);
+            asteroidSpawnRate = Math.max(30, 100 - difficultyFactor * 10);
+        }
+
+        // Spawn enemies
+        function spawnEnemy() {
+            if (frameCount % Math.round(enemySpawnRate) === 0) {
+                const difficultyFactor = Math.floor(score / 100);
+                const enemyCount = 1 + Math.floor(difficultyFactor / 2);
+                for (let i = 0; i < enemyCount; i++) {
+                    enemies.push({
+                        x: Math.random() * (canvas.width - 40),
+                        y: 0,
+                        width: 40,
+                        height: 40
+                    });
+                }
+            }
+        }
+
+        // Spawn asteroids
+        function spawnAsteroid() {
+            if (frameCount % Math.round(asteroidSpawnRate) === 0) {
+                asteroids.push({
+                    x: Math.random() * (canvas.width - 50),
+                    y: 0,
+                    width: 50,
+                    height: 50
+                });
+            }
+        }
+
+        // Spawn power-ups
+        function spawnPowerUp() {
+            if (frameCount % powerUpSpawnRate === 0 && player.gunLevel < 10) {
+                powerUps.push({
+                    x: Math.random() * (canvas.width - 30),
+                    y: 0,
+                    width: 30,
+                    height: 30,
+                    speed: 2
+                });
+            }
+        }
+
+        // Spawn particles
+        function spawnParticles(x, y, count, color) {
+            for (let i = 0; i < count; i++) {
+                particles.push({
+                    x,
+                    y,
+                    vx: (Math.random() - 0.5) * 5,
+                    vy: (Math.random() - 0.5) * 5,
+                    radius: Math.random() * 3 + 1,
+                    color,
+                    life: 30
+                });
+            }
+        }
+
+        // Collect power-up
+        function collectPowerUp() {
+            powerUps.forEach((powerUp, index) => {
+                if (checkCollision(player, powerUp)) {
+                    powerUps.splice(index, 1);
+                    if (player.gunLevel < 10) {
+                        player.gunLevel++;
+                        spawnParticles(powerUp.x + powerUp.width / 2, powerUp.y + powerUp.height / 2, 10, 'green');
+                        powerUpSound.currentTime = 0;
+                        powerUpSound.play().catch(() => {});
+                    }
+                }
+            });
+        }
+
+        // Collision detection
+        function checkCollision(rect1, rect2) {
+            return rect1.x < rect2.x + rect2.width &&
+                   rect1.x + rect1.width > rect2.x &&
+                   rect1.y < rect2.y + rect2.height &&
+                   rect1.y + rect1.height > rect2.y;
+        }
+
+        // Update game state
+        function update() {
+            if (!gameStarted) return;
+
+            if (gameOver) return;
+
+            // Move player
+            if (keys.ArrowLeft && player.x > 0) player.x -= player.speed;
+            if (keys.ArrowRight && player.x < canvas.width - player.width) player.x += player.speed;
+
+            // Shoot bullets
+            shootBullet();
+
+            // Move bullets
+            player.bullets = player.bullets.filter(bullet => bullet.y > 0);
+            player.bullets.forEach(bullet => bullet.y -= bullet.speed);
+
+            // Update difficulty
+            updateDifficulty();
+
+            // Spawn and move enemies
+            spawnEnemy();
+            enemies.forEach(enemy => enemy.y += enemySpeed);
+            enemies = enemies.filter(enemy => enemy.y < canvas.height);
+
+            // Spawn and move asteroids
+            spawnAsteroid();
+            asteroids.forEach(asteroid => asteroid.y += asteroidSpeed);
+            asteroids = asteroids.filter(asteroid => asteroid.y < canvas.height);
+
+            // Spawn and move power-ups
+            spawnPowerUp();
+            powerUps.forEach(powerUp => powerUp.y += powerUp.speed);
+            powerUps = powerUps.filter(powerUp => powerUp.y < canvas.height);
+
+            // Update stars
+            stars.forEach(star => {
+                star.y += star.speed;
+                if (star.y > canvas.height) star.y = 0;
+            });
+
+            // Update particles
+            particles = particles.filter(p => p.life > 0);
+            particles.forEach(p => {
+                p.x += p.vx;
+                p.y += p.vy;
+                p.life--;
+            });
+
+            // Check collisions
+            enemies.forEach((enemy, eIndex) => {
+                player.bullets.forEach((bullet, bIndex) => {
+                    if (checkCollision(bullet, enemy)) {
+                        enemies.splice(eIndex, 1);
+                        player.bullets.splice(bIndex, 1);
+                        score += 10;
+                        spawnParticles(enemy.x + enemy.width / 2, enemy.y + enemy.height / 2, 10, 'red');
+                        explosionSound.currentTime = 0;
+                        explosionSound.play().catch(() => {});
+                    }
+                });
+                if (checkCollision(player, enemy)) {
+                    player.health -= 20;
+                    enemies.splice(eIndex, 1);
+                    spawnParticles(enemy.x + enemy.width / 2, enemy.y + enemy.height / 2, 10, 'red');
+                    if (player.health <= 0) {
+                        gameOver = true;
+                    }
+                }
+            });
+
+            asteroids.forEach((asteroid, aIndex) => {
+                if (checkCollision(player, asteroid)) {
+                    player.health -= 30;
+                    asteroids.splice(aIndex, 1);
+                    spawnParticles(asteroid.x + asteroid.width / 2, asteroid.y + asteroid.height / 2, 10, 'gray');
+                    if (player.health <= 0) {
+                        gameOver = true;
+                    }
+                }
+            });
+
+            // Collect power-ups
+            collectPowerUp();
+
+            frameCount++;
+        }
+
+        // Draw game
+        function draw() {
+            // Clear with black background
+            ctx.fillStyle = 'black';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            if (!gameStarted) {
+                ctx.fillStyle = 'white';
+                ctx.font = '40px "Orbitron", sans-serif';
+                ctx.fillText('Space Hunter 1', canvas.width / 2 - 150, canvas.height / 2 - 40);
+                ctx.font = '20px "Orbitron", sans-serif';
+                ctx.fillText('Press Enter to Start', canvas.width / 2 - 100, canvas.height / 2 + 20);
+                return;
+            }
+
+            // Draw stars
+            ctx.fillStyle = 'white';
+            stars.forEach(star => {
+                ctx.fillRect(star.x, star.y, 2, 2);
+            });
+
+            // Draw player (beautiful spaceship)
+            ctx.save();
+            ctx.translate(player.x + player.width / 2, player.y + player.height / 2);
+            // Main body
+            ctx.fillStyle = 'silver';
+            ctx.beginPath();
+            ctx.moveTo(0, -20); // Nose
+            ctx.lineTo(-20, 10); // Left wing base
+            ctx.lineTo(-10, 20); // Left wing tip
+            ctx.lineTo(10, 20); // Right wing tip
+            ctx.lineTo(20, 10); // Right wing base
+            ctx.closePath();
+            ctx.fill();
+            ctx.strokeStyle = '#00ffcc';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            // Cockpit
+            ctx.fillStyle = 'blue';
+            ctx.beginPath();
+            ctx.arc(0, 0, 5, 0, Math.PI * 2);
+            ctx.fill();
+            // Thrusters
+            ctx.fillStyle = 'cyan';
+            ctx.fillRect(-10, 20, 5, 5);
+            ctx.fillRect(5, 20, 5, 5);
+            ctx.restore();
+
+            // Draw bullets (glowing projectiles)
+            player.bullets.forEach(bullet => {
+                ctx.fillStyle = 'yellow';
+                ctx.beginPath();
+                ctx.arc(bullet.x + bullet.width / 2, bullet.y + bullet.height / 2, bullet.width / 2, 0, Math.PI * 2);
+                ctx.fill();
+            });
+
+            // Draw enemies (modern futuristic drones)
+            enemies.forEach(enemy => {
+                ctx.save();
+                ctx.translate(enemy.x + enemy.width / 2, enemy.y + enemy.height / 2);
+                // Main body (sleek diamond shape)
+                ctx.fillStyle = '#ff3333'; // Bright red
+                ctx.beginPath();
+                ctx.moveTo(0, -20); // Top
+                ctx.lineTo(-15, 0); // Left
+                ctx.lineTo(0, 20); // Bottom
+                ctx.lineTo(15, 0); // Right
+                ctx.closePath();
+                ctx.fill();
+                ctx.strokeStyle = '#ff9999'; // Lighter red outline
+                ctx.lineWidth = 2;
+                ctx.stroke();
+                // Glowing accents (side pods)
+                ctx.fillStyle = 'orange';
+                ctx.beginPath();
+                ctx.arc(-10, 0, 3, 0, Math.PI * 2); // Left pod
+                ctx.arc(10, 0, 3, 0, Math.PI * 2); // Right pod
+                ctx.fill();
+                // Central core
+                ctx.fillStyle = 'yellow';
+                ctx.beginPath();
+                ctx.arc(0, 0, 4, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            });
+
+            // Draw asteroids (craggy shapes)
+            asteroids.forEach(asteroid => {
+                ctx.fillStyle = 'gray';
+                ctx.beginPath();
+                ctx.moveTo(asteroid.x + asteroid.width / 2, asteroid.y);
+                ctx.lineTo(asteroid.x, asteroid.y + asteroid.height / 3);
+                ctx.lineTo(asteroid.x + asteroid.width / 4, asteroid.y + asteroid.height);
+                ctx.lineTo(asteroid.x + asteroid.width * 3 / 4, asteroid.y + asteroid.height);
+                ctx.lineTo(asteroid.x + asteroid.width, asteroid.y + asteroid.height / 3);
+                ctx.closePath();
+                ctx.fill();
+            });
+
+            // Draw power-ups (glowing orbs)
+            powerUps.forEach(powerUp => {
+                ctx.fillStyle = 'green';
+                ctx.beginPath();
+                ctx.arc(powerUp.x + powerUp.width / 2, powerUp.y + powerUp.height / 2, powerUp.width / 2, 0, Math.PI * 2);
+                ctx.fill();
+            });
+
+            // Draw particles
+            particles.forEach(p => {
+                ctx.fillStyle = p.color;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+                ctx.fill();
+            });
+
+            // Draw HUD
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+            ctx.fillRect(0, 0, 200, 100);
+            ctx.fillStyle = 'white';
+            ctx.font = '20px "Orbitron", sans-serif';
+            ctx.fillText(`Score: ${score}`, 10, 30);
+            ctx.fillText(`Gun Level: ${player.gunLevel}`, 10, 60);
+            // Health bar
+            ctx.fillStyle = 'red';
+            ctx.fillRect(10, 70, 180, 20);
+            ctx.fillStyle = 'green';
+            ctx.fillRect(10, 70, (player.health / player.maxHealth) * 180, 20);
+            ctx.strokeStyle = 'white';
+            ctx.strokeRect(10, 70, 180, 20);
+
+            // Draw game over
+            if (gameOver) {
+                ctx.fillStyle = 'white';
+                ctx.font = '40px "Orbitron", sans-serif';
+                ctx.fillText('Game Over', canvas.width / 2 - 100, canvas.height / 2);
+                ctx.font = '20px "Orbitron", sans-serif';
+                ctx.fillText(`Final Score: ${score}`, canvas.width / 2 - 80, canvas.height / 2 + 40);
+                ctx.fillText('Press R to Restart', canvas.width / 2 - 80, canvas.height / 2 + 70);
+            }
+        }
+
+        // Game loop
+        function gameLoop() {
+            update();
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+
+        gameLoop();
+    </script>
+</body>
+</html>
